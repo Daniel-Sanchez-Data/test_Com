@@ -6,21 +6,22 @@ from lxml import etree as ET
 
 def modify_cells(xlsm_file, sheet_xml, updates):
     try:
-        # Crear un directorio temporal
+        # Create a temporary directory
         temp_dir = tempfile.mkdtemp()
         compression_info = {}
 
-        # Extraer el archivo .xlsm preservando la compresión
+        # Extract the .xlsm file while preserving compression
         with zipfile.ZipFile(xlsm_file, 'r') as zf:
             for info in zf.infolist():
                 compression_info[info.filename] = info.compress_type
             zf.extractall(temp_dir)
 
-        # Modificar sharedStrings.xml si es necesario
+        # Define paths for shared strings and the worksheet
         shared_strings_path = os.path.join(temp_dir, "xl", "sharedStrings.xml")
+        sheet_path = os.path.join(temp_dir, "xl", "worksheets", f"{sheet_xml}.xml")
         namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
-        # Cargar sharedStrings.xml si existe
+        # Load sharedStrings.xml if available
         if os.path.exists(shared_strings_path):
             parser = ET.XMLParser(remove_blank_text=True)
             ss_tree = ET.parse(shared_strings_path, parser)
@@ -31,8 +32,7 @@ def modify_cells(xlsm_file, sheet_xml, updates):
             ss_tree = ET.ElementTree(ss_root)
             si_elements = []
 
-        # Modificar la hoja de cálculo
-        sheet_path = os.path.join(temp_dir, "xl", "worksheets", f"{sheet_xml}.xml")
+        # Load the worksheet XML
         parser = ET.XMLParser(remove_blank_text=True)
         tree = ET.parse(sheet_path, parser)
         root = tree.getroot()
@@ -45,27 +45,27 @@ def modify_cells(xlsm_file, sheet_xml, updates):
                 current_col = chr(ord(start_col_letter) + idx)
                 cell_ref = f"{current_col}{row}"
 
-                # Buscar la fila existente o crearla
+                # Find or create the row
                 row_elem = sheet_data.find(f'.//{namespace}row[@r="{row}"]')
                 if row_elem is None:
                     row_elem = ET.SubElement(sheet_data, f"{namespace}row", r=str(row))
 
-                # Buscar la celda existente o crear una nueva
+                # Find or create the cell
                 cell_element = row_elem.find(f'.//{namespace}c[@r="{cell_ref}"]')
                 if cell_element is None:
                     cell_element = ET.SubElement(row_elem, f'{namespace}c', r=cell_ref)
 
-                # Determinar tipo de dato
+                # Determine cell type (number or string)
                 try:
                     float(value.replace(',', '.'))
-                    cell_element.set("t", "n")  # Número
+                    cell_element.set("t", "n")  # Numeric
                     cell_value = ET.SubElement(cell_element, f"{namespace}v")
                     cell_value.text = str(value)
                 except ValueError:
-                    # Si es texto, usar sharedStrings.xml
+                    # Handle string values with sharedStrings.xml
                     cell_element.set("t", "s")
 
-                    # Verificar si el valor ya existe en sharedStrings.xml
+                    # Check if the value already exists in sharedStrings.xml
                     existing_index = next((i for i, si in enumerate(si_elements) if si.find(f"{namespace}t") is not None and si.find(f"{namespace}t").text == value), None)
 
                     if existing_index is None:
@@ -79,16 +79,16 @@ def modify_cells(xlsm_file, sheet_xml, updates):
                     cell_value = ET.SubElement(cell_element, f"{namespace}v")
                     cell_value.text = str(ss_index)
 
-        # Guardar cambios en sharedStrings.xml
+        # Update sharedStrings.xml counts
         ss_root.set("count", str(len(si_elements)))
         ss_root.set("uniqueCount", str(len(set(si.find(f"{namespace}t").text for si in si_elements if si.find(f"{namespace}t") is not None))))
         with open(shared_strings_path, "wb") as f:
             ss_tree.write(f, encoding="UTF-8", xml_declaration=True, pretty_print=True)
 
-        # Guardar la hoja modificada
+        # Save the modified worksheet XML
         tree.write(sheet_path, encoding="UTF-8", xml_declaration=True)
 
-        # Reconstruir el archivo .xlsm sin modificar certificados de macros
+        # Rebuild the .xlsm file without modifying macro certificates
         new_file = os.path.join(".", "Final_" + os.path.basename(xlsm_file))
         with zipfile.ZipFile(new_file, 'w') as new_zip:
             for root_dir, _, files in os.walk(temp_dir):
@@ -97,13 +97,13 @@ def modify_cells(xlsm_file, sheet_xml, updates):
                     rel_path = os.path.relpath(abs_path, temp_dir).replace(os.sep, '/')
                     compress_type = compression_info.get(rel_path, zipfile.ZIP_DEFLATED)
 
-                    # Evitar compresión en archivos binarios (especialmente macros)
+                    # Preserve VBA project compression
                     if "vbaProject.bin" in rel_path or rel_path.endswith(".bin"):
                         compress_type = zipfile.ZIP_STORED
                     
                     new_zip.write(abs_path, rel_path, compress_type=compress_type)
 
-        print(f"✅ Celdas actualizadas con éxito!\nArchivo guardado: {new_file}")
+        print(f"✅ Cells updated successfully!\nFile saved: {new_file}")
 
     except Exception as e:
         print(f"❌ Error: {str(e)}")
@@ -111,7 +111,7 @@ def modify_cells(xlsm_file, sheet_xml, updates):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 if __name__ == "__main__":
-    # Datos a insertar
+    # Define data to insert
     data_to_insert = {
         5: ["C", [
             "20", "HYPOTHEQUE CONVENTION", "29/12/2011", "05/01/2028",
@@ -130,8 +130,10 @@ if __name__ == "__main__":
         ]]
     }
 
+    # File name of the .xlsm file to be modified
     original_file = "template_with_signed_macro.xlsm"
+
+    # Sheet to modify (ensure it matches the actual sheet name)
     sheet_to_modify = "sheet1"
 
     modify_cells(original_file, sheet_to_modify, data_to_insert)
-
